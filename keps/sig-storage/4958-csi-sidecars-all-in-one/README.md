@@ -248,8 +248,7 @@ We follow the instructions on [SIDECAR_RELEASE_PROCESS.md](https://github.com/ku
 
 Kubernetes and CSI are constantly evolving（see the section above on how CSI Sidecars evolve）and so are CSI Drivers, CSI Driver authors must keep their drivers up to date with the new features in k8s and CSI. A CSI Driver implementing most of the CSI features inludes the following components:
 
-pictures:
-![]()
+![csi driver basic structure](./aio1.png "container components of csi driver")
 
 #### keeping up with vulnerabilities with fixes
 
@@ -257,13 +256,14 @@ A cluster administrator in addition to keeping up with the latest k8s and CSI fe
 
 Usually the above might be enough for the latest release however the vulnerability might also affest older releases of the CSI Sidecars, therefore the fix needs to be appliedto older CSI Sidecar releases
 
-pictures:
-![]()
+![sidecar version bumps up](./aio2.png)
 
 The above increases the work not only for the SIG Storage community which has to cherry pick the fix but also to cluster administrators who have to update existing CSI Driver integrations in previous k8s releases bumping the CSI Sidecars
 
 To avoid this propogation issue, cluster administrators have the following options:
 - Use the same version of CSI Sidecars in previous k8s integrations
+
+![sidecar version strategies of gke](./aio3.png)
 
 
 ### Resource utilization by the CSI Sidecar components
@@ -309,16 +309,12 @@ The proposal consists of creating a monorepo which creates a single artifact wit
 - Include the source code of helper utilities in the same repository([csi-release-tools](https://github.com/kubernetes-csi/csi-release-tools), [csi-lib-utils](https://github.com/kubernetes-csi/csi-lib-utils)), sidecars/apps use the local modules through go workspaces. A total of 1 release helper and 1 go module.
 - Create a new cmd/ entrypoint that enables sidecars selectively, similar to kube-controller-manager and the --controllers flag.
 
-> Inclined to NOT include [sig-storage-lib-external-provisioner initially](https://github.com/kubernetes-sigs/sig-storage-lib-external-provisioner). It doesn't depend on release-tools or csi-lib-utils. Regardless of including it or not there should be guidelines to add new repos to the codebase, once that's defined then we can include this repo later if needed.
-
-
-pictures:
-![]()
+![csi aio structure state](./aio4.png)
 
 CSI Driver authors would include a single sidecar in their deployments(in both the control plane and node pools). while the artifact version is the same, the command/arguments will be differents.
 
 pictures:
-![]()
+![desired aio component structure](./aio5.png)
 
 The CSI Driver deployment manifest would look like this in the control plane:
 
@@ -457,201 +453,6 @@ required) or even code snippets. If there's any ambiguity about HOW your
 proposal will be implemented, this is the place to discuss them.
 -->
 
-We modify the existing VolumeBinding plugin to achieve scoring of nodes for dynamic provisioning.
-
-### Modify stateData to be able to store StorageCapacity
-
-We modify the struct called `PodVolumes` contained in `stateData` to score nodes for dynamic provisioning.
-
-The struct of `stateData` is as follows:
-
-```go
-type stateData struct {
-	...
-	// podVolumesByNode holds the pod's volume information found in the Filter
-	// phase for each node
-	// it's initialized in the PreFilter phase
-	podVolumesByNode map[string]*PodVolumes
-	...
-}
-```
-
-By making the following changes to `PodVolumes`, `CSIStorageCapacity` can be stored.
-
-```diff
-+ type DynamicProvision struct {
-+ 	PVC      *v1.PersistentVolumeClaim
-+ 	Capacity *storagev1.CSIStorageCapacity
-+ }
-
-type PodVolumes struct {
-	StaticBindings []*BindingInfo
--   DynamicProvisions []*v1.PersistentVolumeClaim
-+ 	DynamicProvisions []*DynamicProvision
-}
-```
-
-### Get the capacity of nodes for dynamic provisioning
-
-Add `CSIStorageCapacity` to the return value of the `volumeBinder.hasEnoughCapacity` method. This returns the `DynamicProvision.Capacity` field in the case of dynamic provisioning.
-
-```diff
-- func (b *volumeBinder) hasEnoughCapacity(provisioner string, claim *v1.PersistentVolumeClaim, storageClass *storagev1.StorageClass, node *v1.Node) (bool, error) {
-+ func (b *volumeBinder) hasEnoughCapacity(provisioner string, claim *v1.PersistentVolumeClaim, storageClass *storagev1.StorageClass, node *v1.Node) (bool, *storagev1.CSIStorageCapacity, error) {
-	quantity, ok := claim.Spec.Resources.Requests[v1.ResourceStorage]
-	if !ok {
-		// No capacity to check for.
-- 		return true, nil
-+ 		return true, nil, nil
-	}
-
-	// Only enabled for CSI drivers which opt into it.
-	driver, err := b.csiDriverLister.Get(provisioner)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			// Either the provisioner is not a CSI driver or the driver does not
-			// opt into storage capacity scheduling. Either way, skip
-			// capacity checking.
-- 			return true, nil
-+ 			return true, nil, nil
-		}
-- 		return false, err
-+ 		return false, nil, err
-	}
-	if driver.Spec.StorageCapacity == nil || !*driver.Spec.StorageCapacity {
-- 		return true, nil
-+ 		return true, nil, nil
-	}
-
-	// Look for a matching CSIStorageCapacity object(s).
-	// TODO (for beta): benchmark this and potentially introduce some kind of lookup structure (https://github.com/kubernetes/enhancements/issues/1698#issuecomment-654356718).
-	capacities, err := b.csiStorageCapacityLister.List(labels.Everything())
-	if err != nil {
-- 		return false, err
-+ 		return false, nil, err
-	}
-
-  sizeInBytes := quantity.Value()
-	for _, capacity := range capacities {
-		if capacity.StorageClassName == storageClass.Name &&
-			capacitySufficient(capacity, sizeInBytes) &&
-			b.nodeHasAccess(node, capacity) {
-			// Enough capacity found.
-- 			return true, nil
-+ 			return true, capacity, nil
-		}
-	}
-
-	// TODO (?): this doesn't give any information about which pools where considered and why
-	// they had to be rejected. Log that above? But that might be a lot of log output...
-	klog.V(4).InfoS("Node has no accessible CSIStorageCapacity with enough capacity for PVC",
-		"node", klog.KObj(node), "PVC", klog.KObj(claim), "size", sizeInBytes, "storageClass", klog.KObj(storageClass))
-- 	return false, nil
-+ 	return false, nil, nil
-}
-```
-
-### Scoring of nodes for dynamic provisioning
-
-The `Score` method in the current VolumeBinding plug-in scores nodes considering only static provisioning. The scoring applies to every entry in `podVolumes.StaticBindings`.
-
-In this KEP, add the scoring of nodes for dynamic provisioning in the `Score` method of the VolumeBinding plugin. The scoring applies to every entry in `podVolumes.DynamicProvisions` where `Capacity` is not equal to `nil`.
-
-Scoring for dynamic provisioning is executed if there are no `StaticBindings`. In other words, if there is only static provisioning or both static and dynamic provisioning, the scoring will be done as usual for static provisioning. Then, if there is only dynamic provisioning, the following will be set to `classResources` and passed to the `scorer` function:
-
-- `Requested: provision.PVC.Spec.Resources.Requests[v1.ResourceName(v1.ResourceStorage)]`
-- `Capacity: CSIStorageCapacity`
-
-By doing this, we can calculate scores to nodes for dynamic provisioning in a way that is based on the `Shape` setting of `VolumeBindingArgs`, and which takes into account the amount of free space the nodes have.
-
-```diff
-// Score invoked at the score extension point.
-func (pl *VolumeBinding) Score(ctx context.Context, cs *framework.CycleState, pod *v1.Pod, nodeName string) (int64, *framework.Status) {
-	if pl.scorer == nil {
-		return 0, nil
-	}
-	state, err := getStateData(cs)
-	if err != nil {
-		return 0, framework.AsStatus(err)
-	}
-	podVolumes, ok := state.podVolumesByNode[nodeName]
-        if !ok {
-		return 0, nil
-	}
--       // group by storage class
-+
-        classResources := make(classResourceMap)
--       for _, staticBinding := range podVolumes.StaticBindings {
--               class := staticBinding.StorageClassName()
--               storageResource := staticBinding.StorageResource()
--               if _, ok := classResources[class]; !ok {
--                       classResources[class] = &StorageResource{
--                               Requested: 0,
--                               Capacity:  0,
-+       if len(podVolumes.StaticBindings) != 0 {
-+               // group static biding volumes by storage class
-+               for _, staticBinding := range podVolumes.StaticBindings {
-+                       class := staticBinding.StorageClassName()
-+                       storageResource := staticBinding.StorageResource()
-+                       if _, ok := classResources[class]; !ok {
-+                               classResources[class] = &StorageResource{
-+                                       Requested: 0,
-+                                       Capacity:  0,
-+                               }
-+                       }
-+                       classResources[class].Requested += storageResource.Requested
-+                       classResources[class].Capacity += storageResource.Capacity
-+               }
-+       } else {
-+               // group dynamic biding volumes by storage class
-+               for _, provision := range podVolumes.DynamicProvisions {
-+                       if provision.Capacity == nil {
-+                               continue
-+                       }
-+                       class := *provision.PVC.Spec.StorageClassName
-+                       if _, ok := classResources[class]; !ok {
-+                               classResources[class] = &StorageResource{
-+                                       Requested: 0,
-+                                       Capacity:  0,
-+                               }
-                        }
-+                       requestedQty := provision.PVC.Spec.Resources.Requests[v1.ResourceName(v1.ResourceStorage)]
-+                       classResources[class].Requested += requestedQty.Value()
-+                       classResources[class].Capacity += provision.Capacity.Capacity.Value()
-                }
--               classResources[class].Requested += storageResource.Requested
--               classResources[class].Capacity += storageResource.Capacity
-        }
-+
-        return pl.scorer(classResources), nil
-}
-```
-
-Users can select the scoring logic from the following options in `VolumeBindingArgs`. The scoring logic is the same among all Pod + PVC(s).
-
-- (a) Prefer a node with the least allocatable.
-- (b) Prefer a node with the maximum allocatable.
-
-Considering the common scenario of local storage, we want to leave room for volume expansion after node allocation. The default setting is to prefer a node with the maximum allocatable.
-
-### Conditions for scoring static or dynamic provisioning
-
-About the `Score` function, the score will be calculated with the existing way (only static provisioning is taken into account) if at least one PVC was statically provisioned. Otherwise, the score will be calculated from dynamic provisioning.
-
-Implementation idea:
-
-```diff
-func (pl *VolumeBinding) Score(ctx context.Context, cs *framework.CycleState, pod *v1.Pod, nodeName string) (int64, *framework.Status) {
-	...
-
-+ 	if len(static) != 0 {
-+ 		return static_score, nil;	// Same value as the current method
-+ 	} else {
-+ 		return dynamic_score, nil;	// Propose in this KEP
-+ 	}
-- 	return pl.scorer(classResources), nil
-}
-```
 
 ### Test Plan
 
@@ -666,9 +467,6 @@ when drafting this test plan.
 [testing-guidelines]: https://git.k8s.io/community/contributors/devel/sig-testing/testing.md
 -->
 
-[X] I/we understand the owners of the involved components may require updates to
-existing tests to make this code solid enough prior to committing the changes necessary
-to implement this enhancement.
 
 ##### Prerequisite testing updates
 
@@ -677,7 +475,6 @@ Based on reviewers feedback describe what additional tests need to be added prio
 implementing this enhancement to ensure the enhancements have also solid foundations.
 -->
 
-Nothing in particular.
 
 ##### Unit tests
 
@@ -700,10 +497,6 @@ This can inform certain test coverage improvements that we want to do before
 extending the production code to implement this enhancement.
 -->
 
-The following unit tests are planned:
-
-- Are the scores assigned to nodes for dynamic provisioning appropriate for the amount of free space?
-- Are the amount of free space score of nodes for dynamic provisioning and the Static Bindings score both functional?
 
 ##### Integration tests
 
@@ -715,7 +508,6 @@ For Beta and GA, add links to added tests together with links to k8s-triage for 
 https://storage.googleapis.com/k8s-triage/index.html
 -->
 
-The scoring function will be tested in test/integration/volumescheduling/storage_capacity_scoring_test.go.
 
 ##### e2e tests
 
@@ -728,17 +520,6 @@ https://storage.googleapis.com/k8s-triage/index.html
 
 We expect no non-infra related flakes in the last month as a GA graduation criteria.
 -->
-
-The following e2e tests are planned:
-
-- When only static provisioning is available, or a mixture of static provisioning and dynamic provisioning is available:
-  - Does it pass traditional tests?
-- When only dynamic provisioning is available:
-  - Is the Pod placed on the node with the largest available space by default?
-  - When `VolumeBindingArgs` is set to "Prefer a node with the maximum allocatable", is the Pod placed on the node with the largest available space?
-  - When `VolumeBindingArgs` is set to "Prefer a node with the least allocatable", is the Pod placed on the node that meets the requested size but has the smallest available space?
-  - Does the Pod placement fail if no node meets the requested size?
-  - Even when the Pod is recreated, is the placement in the node performed as expected above?
 
 ### Graduation Criteria
 
@@ -804,18 +585,6 @@ in back-to-back releases.
 - Deprecate the flag
 -->
 
-#### Alpha
-
-- Add `StorageCapacityScoring` feature gate
-- E2e tests completed
-
-#### Beta
-
-- One release with positive feedback from users
-
-#### GA
-
-- No users complaining about the new behavior
 
 ### Upgrade / Downgrade Strategy
 
@@ -831,14 +600,6 @@ enhancement:
   cluster required to make on upgrade, in order to make use of the enhancement?
 -->
 
-1. Upgrading the cluster to support storage capacity scoring for dynamic provisioning:
-   - After the upgrade, the scheduler will be able to score nodes based on their storage capacity for dynamic provisioning. This will involve additional checks and calculations to ensure that nodes with sufficient capacity are prioritized.
-   - Existing configurations and API usage will remain compatible, but administrators may need to review and adjust their storage class configurations to fully leverage the new scoring mechanism.
-
-2. Downgrading the cluster to a version without storage capacity scoring for dynamic provisioning:
-   - If the cluster is downgraded, the scheduler will revert to the previous behavior where storage capacity scoring for dynamic provisioning is not considered.
-   - Any Pods created after the upgrade will still exist, but their scheduling will no longer take storage capacity into account, potentially leading to less optimal placement.
-   - No additional changes to invocations or configurations are required, but administrators should be aware that the enhanced scheduling capabilities will be lost.
 
 ### Version Skew Strategy
 
@@ -855,7 +616,6 @@ enhancement:
   CRI or CNI may require updating that component before the kubelet.
 -->
 
-Nothing in particular.
 
 ## Production Readiness Review Questionnaire
 
@@ -899,9 +659,6 @@ well as the [existing list] of feature gates.
 [existing list]: https://kubernetes.io/docs/reference/command-line-tools-reference/feature-gates/
 -->
 
-- [X] Feature gate (also fill in values in `kep.yaml`)
-  - Feature gate name: StorageCapacityScoring
-  - Components depending on the feature gate: kube-scheduler
 
 ###### Does enabling the feature change any default behavior?
 
@@ -914,7 +671,6 @@ automations, so be extremely careful here.
 
 ###### Can the feature be disabled once it has been enabled (i.e. can we roll back the enablement)?
 
-Yes, this feature can be disabled after it has been enabled by setting the feature gate to false again. In doing so, the scoring for VolumeBinding will revert to the current method. This change won't affect the behavior of existing Pods.
 
 <!--
 Describe the consequences on existing workloads (e.g., if this is a runtime
@@ -929,7 +685,6 @@ NOTE: Also set `disable-supported` to `true` or `false` in `kep.yaml`.
 
 ###### What happens if we reenable the feature if it was previously rolled back?
 
-Re-enabling the feature from a rolled-back state will result in scheduling that considers dynamic provisioning. There will be no impact on existing running Pods.
 
 ###### Are there any tests for feature enablement/disablement?
 
@@ -956,7 +711,6 @@ This section must be completed when targeting beta to a release.
 
 ###### How can a rollout or rollback fail? Can it impact already running workloads?
 
-Turning the feature gate flag on/off only changes scheduling scoring. So there is no possibility of impacting workloads that are already running.
 
 <!--
 Try to be as paranoid as possible - e.g., what if some components will restart
@@ -970,7 +724,6 @@ will rollout across nodes.
 
 ###### What specific metrics should inform a rollback?
 
-A spike on metric `schedule_attempts_total{result="error|unschedulable"}` when this feature gate is enabled.
 
 <!--
 What signals should users be paying attention to when the feature is young
@@ -979,7 +732,6 @@ that might indicate a serious problem?
 
 ###### Were upgrade and rollback tested? Was the upgrade->downgrade->upgrade path tested?
 
-Not applicable, yet.
 
 <!--
 Describe manual testing that was done and the outcomes.
@@ -989,7 +741,6 @@ are missing a bunch of machinery and tooling and can't do that now.
 
 ###### Is the rollout accompanied by any deprecations and/or removals of features, APIs, fields of API types, flags, etc.?
 
-No, it isn't.
 
 <!--
 Even if applying deprecation policies, they may still surprise some users.
@@ -1006,8 +757,6 @@ previous answers based on experience in the field.
 
 ###### How can an operator determine if the feature is in use by workloads?
 
-If enabled, this feature applies to all workloads which uses delay binding PVCs. Also non-zero value of metric `plugin_execution_duration_seconds{plugin="VolumeBinding",extension_point="Score"}` is a sign indicating this feature is in use.
-Unfortunately, there is no way to distinguish whether only static provisioning is being considered (the current behavior) or both static and dynamic provisioning are being considered (the new behavior).
 
 <!--
 Ideally, this should be a metric. Operations against the Kubernetes API (e.g.,
@@ -1017,7 +766,6 @@ logs or events for this purpose.
 
 ###### How can someone using this feature know that it is working for their instance?
 
-Pods that use only dynamically provisioned PVCs will be scheduled to nodes with more available capacity.
 
 <!--
 For instance, if this is a pod-related feature, it should be possible to determine if the feature is functioning properly
@@ -1038,7 +786,6 @@ Recall that end users cannot usually observe component logs or access metrics.
 
 ###### What are the reasonable SLOs (Service Level Objectives) for the enhancement?
 
-It may affect the time taken by scheduling. Clarify it during the beta phase.
 
 <!--
 This is your opportunity to define what "normal" quality of service looks like
@@ -1057,7 +804,6 @@ question.
 
 ###### What are the SLIs (Service Level Indicators) an operator can use to determine the health of the service?
 
-Clarify this during the beta phase.
 
 <!--
 Pick one more of these and delete the rest.
@@ -1118,7 +864,6 @@ previous answers based on experience in the field.
 
 ###### Will enabling / using this feature result in any new API calls?
 
-No.
 
 <!--
 Describe them, providing:
@@ -1135,7 +880,6 @@ Focusing mostly on:
 
 ###### Will enabling / using this feature result in introducing new API types?
 
-No.
 
 <!--
 Describe them, providing:
@@ -1146,8 +890,6 @@ Describe them, providing:
 
 ###### Will enabling / using this feature result in any new calls to the cloud provider?
 
-No.
-
 <!--
 Describe them, providing:
   - Which API(s):
@@ -1156,7 +898,6 @@ Describe them, providing:
 
 ###### Will enabling / using this feature result in increasing size or count of the existing API objects?
 
-No.
 
 <!--
 Describe them, providing:
@@ -1167,7 +908,6 @@ Describe them, providing:
 
 ###### Will enabling / using this feature result in increasing time taken by any operations covered by existing SLIs/SLOs?
 
-Yes, it may affect the time taken by scheduling.
 
 <!--
 Look at the [existing SLIs/SLOs].
@@ -1180,7 +920,6 @@ Think about adding additional work or introducing new steps in between
 
 ###### Will enabling / using this feature result in non-negligible increase of resource usage (CPU, RAM, disk, IO, ...) in any components?
 
-No.
 
 <!--
 Things to keep in mind include: additional in-memory state, additional
@@ -1221,11 +960,9 @@ details). For now, we leave it here.
 
 ###### How does this feature react if the API server and/or etcd is unavailable?
 
-The behavior in such cases does not change. This proposal only modifies one of the plugins in the kube-scheduler.
 
 ###### What are other known failure modes?
 
-Not applicable, yet.
 
 <!--
 For each of them, fill in the following information by copying the below template:
@@ -1242,11 +979,9 @@ For each of them, fill in the following information by copying the below templat
 
 ###### What steps should be taken if SLOs are not being met to determine the problem?
 
-Check the kube-scheduler logs.
 
 ## Implementation History
 
-- 2023-05-30 Initial KEP sent out for review
 
 <!--
 Major milestones in the lifecycle of a KEP should be tracked in this section.
@@ -1261,7 +996,6 @@ Major milestones might include:
 
 ## Drawbacks
 
-- The implementation of storage capacity scoring for dynamic provisioning may introduce complexity in the scheduling process. This could potentially lead to increased scheduling latency as the scheduler performs additional checks and calculations.
 
 <!--
 Why should this KEP _not_ be implemented?
@@ -1274,24 +1008,6 @@ What other approaches did you consider, and why did you rule them out? These do
 not need to be as detailed as the proposal, but should include enough
 information to express the idea and why it was not acceptable.
 -->
-
-### Weighting Static Provisioning Scores and Dynamic Provisioning Scores
-
-The scoring function will return the sum of the static score and the dynamic score, each multiplied by their respective weights. The weights are determined by the ratio of static and dynamic capacities.
-
-Implementation idea for the `Score` function:
-
-```go
-func (pl *VolumeBinding) Score(...) (int64, *framework.Status) {
-  ...
-  return (static_weight) * static_score + (1-static_weight) * dynamic_score;
-}
-```
-
-Ultimately, the current design was chosen. The reasons are as follows:
-
-- Conflict issue: In this approach, there is a possibility that the static provisioning and dynamic provisioning scores could cancel each other out, leading to inaccurate scoring.
-- Feasibility of implementation: The current design was deemed more feasible and clearer in terms of implementation.
 
 ## Infrastructure Needed (Optional)
 
