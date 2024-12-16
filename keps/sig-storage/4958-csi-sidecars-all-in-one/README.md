@@ -283,7 +283,19 @@ The 5x memory request is addtional overhead in the control plane nodes, 2x in th
 
 ### Goals
 
--  To combine the source code of the CSI Sidecars in a monorepo, Instead of just putting the code repositories together.
+- To combine the source code of the CSI Sidecars in a monorepo.
+- To comnine the entrance of CSI Sidecars in one binary.
+  - If we just merge the source code, we won't be able to reuse resources and realize the above advantages
+  - To minimize impact on users, we can't seperate the whole migration process in to two steps.(merge source code and merge the entrance)
+- The sidecars includees the following:
+  - [external-attacher](https://github.com/kubernetes-csi/external-attacher)
+  - [external-provisioner](https://github.com/kubernetes-csi/external-provisioner)
+  - [external-resizer](https://github.com/kubernetes-csi/external-resizer)
+  - [external-snapshotter](https://github.com/kubernetes-csi/external-snapshotter)
+  - [livenessprobe](https://github.com/kubernetes/livenessprobe)
+  - [node-driver-registrar](https://github.com/kubernetes-csi/node-driver-registrar)
+  - [volume-helth-monitor](https://github.com/kubernetes-csi/external-health-monitor)
+- Retain git history logs of sidecars in new monorepo.
 
 <!--
 List the specific goals of the KEP. What is it trying to achieve? How will we
@@ -292,8 +304,10 @@ know that this has succeeded?
 
 ### Non-Goals
 
--  Not include [sig-storage-lib-external-provisioner](https://github.com/kubernetes-sigs/sig-storage-lib-external-provisioner). It doesn't depend on release-tools or csi-lib-utils. 
-
+- The sidecars not include [sig-storage-lib-external-provisioner](https://github.com/kubernetes-sigs/sig-storage-lib-external-provisioner). 
+  - Because it doesn't depend on release-tools or csi-lib-utils. 
+- [release-tools](https://github.com/kubernetes-csi/csi-release-tools) and [csi-lib-utils](https://github.com/kubernetes-csi/csi-lib-utils) are not included in the monorepo.
+  - we can start with the sidecars only and no utility libraries, after we see that it works in CI then we can consider moving the utilities to the monorepo. we will open another KEP if we need to move them.
 
 <!--
 What is out of scope for this KEP? Listing non-goals helps to focus discussion
