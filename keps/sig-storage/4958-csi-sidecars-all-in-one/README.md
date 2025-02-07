@@ -458,7 +458,7 @@ Go in to as much detail as necessary here.
 This might be a good place to talk about core concepts and how they relate.
 -->
 
-## Design Details
+### Design Details
 
 <!--
 This section should contain enough information that the specifics of your
@@ -466,6 +466,112 @@ change are understandable. This may include API specs (though not always
 required) or even code snippets. If there's any ambiguity about HOW your
 proposal will be implemented, this is the place to discuss them.
 -->
+
+![overview](./aio6.png "overview of design details")
+
+#### Glossary
+- Individual repository - An existing repository in the kubernetes-csi/ org in Github e.g. the external-attacher repository.
+- AIO monorepo or monorepo - The monolithic repository where most of the code of the CSI Sidecars will be migrated.
+- Monorepo component - The source code of an individual repository that is currently being migrated or already migrated to the monorepo. 
+
+#### AIO Monorepo 
+
+##### Release Management
+
+Semantic Versioning
+
+##### RBAC policy
+
+We designed the AIO repo's RBAC policy to mirror that of individual repos, where each controller maintains its own policy. Driver maintainers should apply proper RBAC when enabling specific controllers in AIO
+
+> We plan to combine informer caches of different controllers in the future, which will involve updating some RBAC policies, to be addressed in a subsequent KEP
+
+##### Command Line
+
+Divided the command lines into two types, a generic command line whose configuration is common to all controllers and is configured only once, and the other type of command lines whose configuration is different for each controller. these command lines each has a new unique name. prefix with the controller name.
+
+example PR: https://github.com/kubernetes-csi/external-attacher/pull/620
+
+#### Monorepo component
+
+poc version: https://github.com/mauriciopoppe/csi-sidecars
+
+
+#### Deployment Workflow Definition
+
+After we see the Monorepo component running fine in integration/e2e tests in k8s, we need to perform a hard cut so that new deployment goes in the monorepo component only.
+
+##### AIO MonoRepo state definition
+
+- inner-verified: Current state of AIO MonoRepo
+- production-verified: Available for production environments, a Cloud vendor that's using it in its production environment.
+- released: Official released, Available for accept PRs from SIG Storage Developer
+- standalone: Never need sync codes from individual repos, AIO MonoRepo become the source of truth
+
+
+##### Individual repository state definition
+
+- Released: current state of individual repos
+- FeatureFreeze: 
+    - Any new feature PRs are not allowed to be filed to the master branch or release-X branches(Controlled by the individual repo maintainer, categorize it and reject it if it's a feature)
+    - SIG Storage Developer file the feature PRs to AIO MonoRepo 
+    - Except for the serious bugfixes or CVE fixes PRs (only from individual repo maintainer) which can be merged in master and backported to the other release-X branches
+- Deprecated:
+    - Not maintaining this repository
+    - Eventually the image is going away for the individual repo is going away (although wouldn't possible unless we migrate ALL the sidecars)
+    - (future) archive it but not at the same time as the deprecation time, this is a terminal state so we can't undo it
+
+
+![state change](./aio11.png "overview of workflow definition")
+
+##### Migration Process
+
+![migration process](./aio10.png "")
+
+details: 
+
+#### Risks And Mitigations
+
+- Breaking changes in one component forces the single release to be a breaking change
+
+- Vulnerability that might affects one component affects all other components
+
+see details in: https://docs.google.com/document/d/1SD4YRas_qXMP363L4j3WBTV_F9anq-5FM5gdGmJq7h0/edit?usp=sharing
+
+- Panic in one component restarts the sidecar
+
+For each sidecar define the where in the stack a panic should be caught to possibly restart the controller. 
+
+List of fixed issues related with panics:
+    - https://github.com/kubernetes-csi/external-provisioner/issues/839
+    - https://github.com/kubernetes-csi/external-provisioner/issues/582 
+    - https://github.com/kubernetes-csi/external-attacher/issues/502
+
+> panic like OOM doesn't count into this type(perhaps no good way to reduce the blast radius)
+
+- Keeping the monorepo and the existing sidecars repo up to date after the migration for X releases
+
+
+
+
+### MillStone
+
+#### Milestone (completed): Develop a minimal proof of concept
+
+POC: https://github.com/mauriciopoppe/csi-sidecars
+
+
+#### Milestone: Set up a repository inside kubernetes-csi
+
+#### Milestone: Build the project using a modified copy of release-tools
+
+#### Milestone: Set up new test-infra jobs to test the project through the Hostpath CSI Driver
+
+#### Milestone: Mirroring of nested directories to repos in kubernetes-csi
+
+#### Milestone (completed): Definition of the development workflow
+
+#### Milestone: Migration of CSI Drivers to the new model 
 
 
 ### Test Plan
@@ -674,9 +780,11 @@ well as the [existing list] of feature gates.
 -->
 
 
+It's actually not a feature, but we can enable it by deploy new version of csidriver and disable it by delete the new version and redeploy the old version
+
 ###### Does enabling the feature change any default behavior?
 
-The scheduling behavior is changed if this function is enabled.
+This won't make any changes to the default behavior of Kubernetes.
 
 <!--
 Any change of default behavior may be surprising to users or break existing
@@ -685,6 +793,7 @@ automations, so be extremely careful here.
 
 ###### Can the feature be disabled once it has been enabled (i.e. can we roll back the enablement)?
 
+It's actually not a feature, it's kind of architectural change. so user can deploy old version csi driver to disable it.
 
 <!--
 Describe the consequences on existing workloads (e.g., if this is a runtime
@@ -699,6 +808,7 @@ NOTE: Also set `disable-supported` to `true` or `false` in `kep.yaml`.
 
 ###### What happens if we reenable the feature if it was previously rolled back?
 
+Nothing happend, it will act as usually
 
 ###### Are there any tests for feature enablement/disablement?
 
@@ -957,7 +1067,6 @@ Are there any tests that were run/should be run to understand performance charac
 and validate the declared limits?
 -->
 
-No, this feature will not exhaust node resources such as PIDs, sockets, or inodes.
 
 ### Troubleshooting
 
