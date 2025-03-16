@@ -80,27 +80,50 @@ tags, and then generate with `hack/update-toc.sh`.
 - [Release Signoff Checklist](#release-signoff-checklist)
 - [Summary](#summary)
 - [Motivation](#motivation)
+  - [Increased maintenance tasks on components maintained by the SIG Storage community](#increased-maintenance-tasks-on-components-maintained-by-the-sig-storage-community)
+    - [CSI Sidecars releases](#csi-sidecars-releases)
+  - [Maintenance tasks by CSI Driver authors and cluster administrators](#maintenance-tasks-by-csi-driver-authors-and-cluster-administrators)
+    - [keeping up with vulnerabilities with fixes](#keeping-up-with-vulnerabilities-with-fixes)
+  - [Resource utilization by the CSI Sidecar components](#resource-utilization-by-the-csi-sidecar-components)
   - [Goals](#goals)
   - [Non-Goals](#non-goals)
 - [Proposal](#proposal)
+  - [Overview](#overview)
   - [User Stories (Optional)](#user-stories-optional)
-    - [Story 1](#story-1)
-    - [Story 2](#story-2)
   - [Notes/Constraints/Caveats (Optional)](#notesconstraintscaveats-optional)
-- [Design Details](#design-details)
-  - [Modify stateData to be able to store StorageCapacity](#modify-statedata-to-be-able-to-store-storagecapacity)
-  - [Get the capacity of nodes for dynamic provisioning](#get-the-capacity-of-nodes-for-dynamic-provisioning)
-  - [Scoring of nodes for dynamic provisioning](#scoring-of-nodes-for-dynamic-provisioning)
-  - [Conditions for scoring static or dynamic provisioning](#conditions-for-scoring-static-or-dynamic-provisioning)
+  - [Design Details](#design-details)
+    - [Glossary](#glossary)
+    - [AIO Monorepo](#aio-monorepo)
+      - [Release Management](#release-management)
+      - [RBAC policy](#rbac-policy)
+      - [Command Line](#command-line)
+      - [Code synchronization](#code-synchronization)
+      - [Individual repo history](#individual-repo-history)
+      - [Reproducible builds &amp; Dependencies Management](#reproducible-builds--dependencies-management)
+    - [Risks And Mitigations](#risks-and-mitigations)
+    - [Development workflow](#development-workflow)
+  - [MileStone](#milestone)
+    - [Milestone-modify-entrypoints-of-existing-sidecars-to-integrate-it-seamlessly-with-the-AIO-sidecar](#milestone-modify-entrypoints-of-existing-sidecars-to-integrate-it-seamlessly-with-the-aio-sidecar)
+    - [Milestone-setting-up-a-Kubernetes-CSI-Storage-Repository-with-nested-directory-synchronization](#milestone-setting-up-a-kubernetes-csi-storage-repository-with-nested-directory-synchronization)
+    - [Milestone-Build-the-project-using-a-modified-copy-of-release-tools](#milestone-build-the-project-using-a-modified-copy-of-release-tools)
+    - [Milestone-set-up-new-test-infra-jobs-to-test-the-project-through-the-hostpath-CSI-Driver](#milestone-set-up-new-test-infra-jobs-to-test-the-project-through-the-hostpath-csi-driver)
+    - [Milestone-ready-to-accept-PR-from-community](#milestone-ready-to-accept-pr-from-community)
+    - [Milestone-define-the-path-for-2-CSI-Drivers-to-be-migrated.](#milestone-define-the-path-for-2-csi-drivers-to-be-migrated)
+    - [Milestone: Have instructions for CSI Driver authors](#milestone-have-instructions-for-csi-driver-authors)
+    - [Milestone-three-cloud-vendors-start-using-the-monorepo-component-for-multi-k8s-minor-releases](#milestone-three-cloud-vendors-start-using-the-monorepo-component-for-multi-k8s-minor-releases)
+    - [Milestone-accept-PR-from-community](#milestone-accept-pr-from-community)
+    - [milestone-all-individual-repo-has-been-into-featurefreeze-state](#milestone-all-individual-repo-has-been-into-featurefreeze-state)
+    - [Milestone-all-individual-repo-has-been-into-deprecated-state](#milestone-all-individual-repo-has-been-into-deprecated-state)
+    - [Milestone-merge-sidecar-informer-caches](#milestone-merge-sidecar-informer-caches)
   - [Test Plan](#test-plan)
       - [Prerequisite testing updates](#prerequisite-testing-updates)
       - [Unit tests](#unit-tests)
       - [Integration tests](#integration-tests)
       - [e2e tests](#e2e-tests)
   - [Graduation Criteria](#graduation-criteria)
-    - [Alpha](#alpha)
-    - [Beta](#beta)
-    - [GA](#ga)
+    - [AIO MonoRepo state definition](#aio-monorepo-state-definition)
+    - [Individual repository state definition](#individual-repository-state-definition)
+    - [Migration Process](#migration-process)
   - [Upgrade / Downgrade Strategy](#upgrade--downgrade-strategy)
   - [Version Skew Strategy](#version-skew-strategy)
 - [Production Readiness Review Questionnaire](#production-readiness-review-questionnaire)
@@ -113,7 +136,6 @@ tags, and then generate with `hack/update-toc.sh`.
 - [Implementation History](#implementation-history)
 - [Drawbacks](#drawbacks)
 - [Alternatives](#alternatives)
-  - [Weighting Static Provisioning Scores and Dynamic Provisioning Scores](#weighting-static-provisioning-scores-and-dynamic-provisioning-scores)
 - [Infrastructure Needed (Optional)](#infrastructure-needed-optional)
 <!-- /toc -->
 
@@ -166,7 +188,7 @@ it is expected that the program entries for all sidecars will be consolidated.
 therefore we can:
 - Improve the CSI Sidecar release process by reducing the number of components released
 - Decrease the maintenance tasks the SIG Storage community maintainers do to maintain the Sidecars
-- Propogate changes in common libraries used by CSI Sidecars immediately instead of through additional PRs
+- Propagate changes in common libraries used by CSI Sidecars immediately instead of through additional PRs
 - Reduce the number of components CSI Driver authors and cluster administrators need to keep up to date in k8s clusters
 
 As a side effects of combining the CSI Sidecars into a single component we also
@@ -177,7 +199,7 @@ As a side effects of combining the CSI Sidecars into a single component we also
 This section is incredibly important for producing high-quality, user-focused
 documentation such as release notes or a development roadmap. It should be
 possible to collect this information before implementation begins, in order to
-avoid requiring implementors to split their attention between writing release
+avoid requiring implementers to split their attention between writing release
 notes and implementing the feature itself. KEP editors and SIG Docs
 should help to ensure that the tone and content of the `Summary` section is
 useful for a wide audience.
@@ -210,14 +232,14 @@ updates.
   - CSI Proxy
 As part of the maintenance work of these components the SIG Storage community:
 
-1. Bumps the go runtime, Which usually fix vulnerabilities, then the application binary is rebuild and a new image is released. this is done in csi-release tools and propogated to the other repos([example](https://github.com/kubernetes-csi/csi-release-tools/pull/221)) The effort is part of point #3 below.
+1. Bumps the go runtime, Which usually fix vulnerabilities, then the application binary is rebuild and a new image is released. this is done in csi-release tools and propagated to the other repos([example](https://github.com/kubernetes-csi/csi-release-tools/pull/221)) The effort is part of point #3 below.
 
 2. Updates the dependencies to the latest version, which usually have new releases fixing vulnerabilities, the SIG Storage community reviewers/approvers look at every PR generated by a bot and LGTM/approve it. Because we have different repos the human effort is multiplied.  e.g. review # dependencies * # CSI Sidecars PRs ([example](https://github.com/kubernetes-csi/livenessprobe/pull/195)) 
 
-3. Propogates changes in CSI related dependencies across all the CSI sidecars and CSI Drivers that need them. csi-release-tools has common build utilities used across all the repos, whenever there's a change in this component it's need to be propogated across all the repos.[(example)](https://github.com/kubernetes-csi/node-driver-registrar/pull/293).
+3. Propagates changes in CSI related dependencies across all the CSI sidecars and CSI Drivers that need them. csi-release-tools has common build utilities used across all the repos, whenever there's a change in this component it's need to be propagated across all the repos.[(example)](https://github.com/kubernetes-csi/node-driver-registrar/pull/293).
 Because we have different repos the human effort is multiplied e.g. make (# updates in csi-release-tools + # new changes in csi-lib-utils) * # CSI Sidecars.
 
-To keep dependencies up to date the SIG Storage community uses  https://github.com/dependabot which is a bot that automatically creates a PR whenever a dependency creates a new release. As a side effect, after enabling the bot the number of PRs increased. Also note that because each component is on its own repo a bump in a dependency(assuming that the dependency is shared among many CSI Sidecars) is multiplied accross of them.
+To keep dependencies up to date the SIG Storage community uses  https://github.com/dependabot which is a bot that automatically creates a PR whenever a dependency creates a new release. As a side effect, after enabling the bot the number of PRs increased. Also note that because each component is on its own repo a bump in a dependency(assuming that the dependency is shared among many CSI Sidecars) is multiplied across of them.
 
 Stats for dependency/vuln updates across CSI Sidecars as of Aug 11th, 2023.
 
@@ -233,7 +255,6 @@ Stats for dependency/vuln updates across CSI Sidecars as of Aug 11th, 2023.
 Table: PR to CSI Sidecars related to vuln fixes and library propagation
 
 
-
 #### CSI Sidecars releases
 
 The CSI Drivers/CSI Sidecars have an indirect dependency on the k8s version. This could happen because of:
@@ -246,7 +267,7 @@ We follow the instructions on [SIDECAR_RELEASE_PROCESS.md](https://github.com/ku
 
 ### Maintenance tasks by CSI Driver authors and cluster administrators
 
-Kubernetes and CSI are constantly evolving（see the section above on how CSI Sidecars evolve）and so are CSI Drivers, CSI Driver authors must keep their drivers up to date with the new features in k8s and CSI. A CSI Driver implementing most of the CSI features inludes the following components:
+Kubernetes and CSI are constantly evolving（see the section above on how CSI Sidecars evolve）and so are CSI Drivers, CSI Driver authors must keep their drivers up to date with the new features in k8s and CSI. A CSI Driver implementing most of the CSI features includes the following components:
 
 ![csi driver basic structure](./aio1.png "container components of csi driver")
 
@@ -260,7 +281,7 @@ Usually the above might be enough for the latest release however the vulnerabili
 
 The above increases the work not only for the SIG Storage community which has to cherry pick the fix but also to cluster administrators who have to update existing CSI Driver integrations in previous k8s releases bumping the CSI Sidecars
 
-To avoid this propogation issue, cluster administrators have the following options:
+To avoid this propagation issue, cluster administrators have the following options:
 - Use the same version of CSI Sidecars in previous k8s integrations
 
 ![sidecar version strategies of gke](./aio3.png)
@@ -279,22 +300,22 @@ In Some CSI Driver control plane deployment setups each sidecar is configured wi
   - AlibabaCloud Disk
     - In a CP node, sets a [16Mi memory request](https://github.com/kubernetes-sigs/alibaba-cloud-csi-driver/blob/9819c8b575acb5eadfb6fada4e42a4add2453c18/deploy/chart/templates/controller.yaml#L106) for each CSI Sidecars(average 4 sidecars) a total of 64Mi per node
     - In a worker node, sets a [16Mi memory request](https://github.com/kubernetes-sigs/alibaba-cloud-csi-driver/blob/9819c8b575acb5eadfb6fada4e42a4add2453c18/deploy/chart/templates/plugin.yaml#L82) for each CSI Sidecars(1 sidecars), a total of 40Mi per node
-The 5x memory request is addtional overhead in the control plane nodes, 2x in the worker nodes
+The 5x memory request is additional overhead in the control plane nodes, 2x in the worker nodes
 
 ### Goals
 
 - To combine the source code of the CSI Sidecars in a monorepo.
 - To comnine the entrance of CSI Sidecars in one binary.
   - If we just merge the source code, we won't be able to reuse resources and realize the above advantages
-  - To minimize impact on users, we can't seperate the whole migration process in to two steps.(merge source code and merge the entrance)
-- The sidecars includees the following:
+  - To minimize impact on users, we can't separate the whole migration process in to two steps.(merge source code and merge the entrance)
+- The sidecars includes the following:
   - [external-attacher](https://github.com/kubernetes-csi/external-attacher)
   - [external-provisioner](https://github.com/kubernetes-csi/external-provisioner)
   - [external-resizer](https://github.com/kubernetes-csi/external-resizer)
   - [external-snapshotter](https://github.com/kubernetes-csi/external-snapshotter)
   - [livenessprobe](https://github.com/kubernetes/livenessprobe)
   - [node-driver-registrar](https://github.com/kubernetes-csi/node-driver-registrar)
-  - [volume-helth-monitor](https://github.com/kubernetes-csi/external-health-monitor)
+  - [volume-health-monitor](https://github.com/kubernetes-csi/external-health-monitor)
 - Retain git history logs of sidecars in new monorepo.
 
 <!--
@@ -325,7 +346,7 @@ The proposal consists of creating a monorepo which creates a single artifact wit
 
 ![csi aio structure state](./aio4.png)
 
-CSI Driver authors would include a single sidecar in their deployments(in both the control plane and node pools). while the artifact version is the same, the command/arguments will be differents.
+CSI Driver authors would include a single sidecar in their deployments(in both the control plane and node pools). while the artifact version is the same, the command/arguments will be different.
 
 pictures:
 ![desired aio component structure](./aio5.png)
@@ -410,10 +431,10 @@ Quantifiable characteristics of the current state and of the proposed state
 
 | Characteristics/State | Current state of CSI Sidecars(let #csi-sidecars=6)|  CSI Sidecars in signal component    | 
 |-----------------|----------------------|-------------------|
-|  Human effort of propogating csi-release-tools        |  (#csi-release-tools changes * #csi-sidecars)          |    0(because csi-release-tools is part of the repo)     | 
-|  Human effort of propogating csi-lib-utils        |  (#csi-lib-utils changes * #csi-sidecars)          |    0(because csi-lib-utils is part of the repo)     | 
+|  Human effort of propagating csi-release-tools        |  (#csi-release-tools changes * #csi-sidecars)          |    0(because csi-release-tools is part of the repo)     | 
+|  Human effort of propagating csi-lib-utils        |  (#csi-lib-utils changes * #csi-sidecars)          |    0(because csi-lib-utils is part of the repo)     | 
 |  go mod dependency bumps        |  (#dependency changes * #csi-sidecars) * CSI release supported(unknown)          |   #dependency changes * releases supported(follow k8s release)    | 
-|  runtime udpate  |  (#csi-release-tools changes related with go runtime updates * #csi-sidecars)        |   #go runtime updates | 
+|  runtime update  |  (#csi-release-tools changes related with go runtime updates * #csi-sidecars)        |   #go runtime updates | 
 |  members of CSI releases per k8s minor release  |   #csi-sidecars     |   1 | 
 
 
@@ -425,8 +446,8 @@ Additional properties of a single CSI Sidecar component without a quantifiable b
 |  Releases        |  <li> Easier releases <li> Better definition of which sidecar releases are supported for CVE fixs i.e. if our model of support is similar to k8s (last 3 releases) then the same applies to the CSI sidecar releases <li> Release nodes in csi-release-tools are part of the release. Currently, [commits in csi-release-tools with release notes get lost](https://github.com/kubernetes-csi/node-driver-registrar/pull/235) because the git subtree commands replays commits but loses the PR release note if csi-release-tools is part of the repo        |     <li> No longer able to do single releases per component.<li> More frequent major version bumps, Currently, we increase the major version of a sidecar when we remove a command line parameter or require new RBAC rules, We ended up with provisioner v5, attacher v4, and snapshotter v8. With a common repo, we would end up with 5+4+8=v17 in the worst case.  | 
 |  Testability        |   <li> [Easier testing](https://slideshare.net/sttts/cutting-the-kubernetes-monorepo-in-pieces-never-learnt-more-about-git) <li> Test features that spawn multiple components e.g. the RWOP feature can be tested as a whole. @pohly  |       | 
 |  Performance & Reliability       |  <li> Can use a shared informer decreasing the load on the API server. @msau42  |  <li> Container getting OOMKilled kills the entire CSI machinery, not just a single component.<ul><li>In HA, another replica would take over a few seconds.   | 
-|  Simplicity    |  <li> Consolidation of common parameters like leader election, structed logging<ul><li>Avoids duplication of some features e.g. [structured logging](https://github.com/kubernetes-csi/livenessprobe/pull/202) would be implemented only once [instead of #csi-sidecar times](https://github.com/kubernetes-csi/livenessprobe/pull/202#issuecomment-1682406525)) @msau42</ul> <li> Combination of metrics/health ports @msau42 <li> Enables using additional sidecars that aren't used because of addtional build pipelines that might be needed to support that additional component.  |  <li> Logs would be interleaved making it harder to trace what happened for a request <li> CSI utility liraries that are not only used by CSI Sidecars but by other project. <ul><li> make an external repo which is automatically syncronized from the internal csi-release-tools e.g. a similar analogy to k/k/staging/lib -> k/lib  | 
-|  Integration with CSI Drivers    |   <li> Less config in the controller/node yaml manifest <li>Less confusion for CSI Driver authors on which CSI Sidecar versions to use @msau42  |   <li> Complex configuration for the single CSI Sidecar component <li> Difficulty expressing per CSI Sidecar configration  e.g. kube-api-qps, kube-qpi-burst <ul><li> global flag, override through a CSI sidecar flag  e.g. kube-api-qps -> attacher-kube-api-qps | 
+|  Simplicity    |  <li> Consolidation of common parameters like leader election, structured logging<ul><li>Avoids duplication of some features e.g. [structured logging](https://github.com/kubernetes-csi/livenessprobe/pull/202) would be implemented only once [instead of #csi-sidecar times](https://github.com/kubernetes-csi/livenessprobe/pull/202#issuecomment-1682406525)) @msau42</ul> <li> Combination of metrics/health ports @msau42 <li> Enables using additional sidecars that aren't used because of additional build pipelines that might be needed to support that additional component.  |  <li> Logs would be interleaved making it harder to trace what happened for a request <li> CSI utility liraries that are not only used by CSI Sidecars but by other project. <ul><li> make an external repo which is automatically synchronized from the internal csi-release-tools e.g. a similar analogy to k/k/staging/lib -> k/lib  | 
+|  Integration with CSI Drivers    |   <li> Less config in the controller/node yaml manifest <li>Less confusion for CSI Driver authors on which CSI Sidecar versions to use @msau42  |   <li> Complex configuration for the single CSI Sidecar component <li> Difficulty expressing per CSI Sidecar configuration  e.g. kube-api-qps, kube-qpi-burst <ul><li> global flag, override through a CSI sidecar flag  e.g. kube-api-qps -> attacher-kube-api-qps | 
 
 
 
@@ -467,18 +488,22 @@ required) or even code snippets. If there's any ambiguity about HOW your
 proposal will be implemented, this is the place to discuss them.
 -->
 
-![overview](./aio6.png "overview of design details")
 
 #### Glossary
-- Individual repository - An existing repository in the kubernetes-csi/ org in Github e.g. the external-attacher repository.
-- Individual component - An existing component of csi sidecars.
-- AIO monorepo or monorepo - The monolithic repository where most of the code of the CSI Sidecars will be migrated.
-- Monorepo component - The source code of an individual repository that is currently being migrated or already migrated to the monorepo. 
+- Individual repository:  An existing repository in the kubernetes-csi/ org in Github e.g. the external-attacher repository.
+- AIO monorepo(monorepo): The monolithic repository where most of the code of the CSI Sidecars will be migrated.
+- Monorepo component:  The source code of an individual repository that is currently being migrated or already migrated to the monorepo. 
+- AIO Sidecar Image: The All-In-One sidecar image utilizes a monorepo
+- repository root path: The portion of a module path that corresponds to a version control repository’s root directory.
+
 
 #### AIO Monorepo 
 
 ##### Release Management
 
+we chose to keep Semantic Versioning in monorepo.
+
+Alternative:
 We are consider to switch semantic version to k8s version, there are some pros and cons 
 
 pros:
@@ -492,15 +517,15 @@ cons:
 - Version skew scenario becomes confusing for the cluster administrator e.g. they deploy the CSI Sidecars v1.x, cluster is upgraded to v1.{x+3} (CP upgrade first, NP later), nodepools would have CSI sidecar at v1.{x+3} with kubelet at v1.x
 - k/k at 1.27.5 - CSI 1.27.0 or (different mapping still)
 
-After investigation, we found that there isn't clear advantage to switch to k8s versioning, so we chose to keep Semantic Versioning in monorepo.
+After investigation, we found that there isn't clear advantage to switch to k8s versioning
 
 
 ##### RBAC policy
 
-We designed the AIO repo's RBAC policy to mirror that of individual repos, where each controller maintains its own policy. Driver maintainers should apply proper RBAC when enabling specific controllers in AIO
-more discuss info in ![here](https://docs.google.com/document/d/1z7OU79YBnvlaDgcvmtYVnUAYFX1w9lyrgiPTV7RXjHM/edit?tab=t.0#bookmark=id.l9u181gxf6ie.)
+We designed the AIO monorepo's RBAC policy to mirror that of individual repos, where each controller maintains its own policy. Driver maintainers should apply proper RBAC when enabling specific controllers in AIO
+more discuss info in [here](https://docs.google.com/document/d/1z7OU79YBnvlaDgcvmtYVnUAYFX1w9lyrgiPTV7RXjHM/edit?tab=t.0#bookmark=id.l9u181gxf6ie.)
 
-We plan to combine informer caches of different controllers in the [future](#Milestone-merge-sidecar-informer-caches))
+We plan to combine informer caches of different controllers in the [future](#informer-merged)
 
 ##### Command Line
 
@@ -527,52 +552,48 @@ Divided the command lines into two types, a generic command line whose configura
 
 example PR: https://github.com/kubernetes-csi/external-attacher/pull/620
 
-#### Monorepo component
 
-poc version: https://github.com/mauriciopoppe/csi-sidecars
+##### Code synchronization
 
+During the transition phase (before individual repositories are fully deprecated), code changes (especially bug fixes and CVE patches) need to be synchronized from individual repositories into the AIO MonoRepo.
 
-#### Development workflow
-
-After we see the Monorepo component running fine in integration/e2e tests in k8s, we need to perform a hard cut so that new deployment goes in the monorepo component only.
-
-##### AIO MonoRepo state definition
-
-- Alpha (inner-verified): Current state of AIO MonoRepo
-- Beta (production-verified): Available for production environments, a Cloud vendor can using it in its production environment.
-- GA (released): Official released, Available for accept PRs from SIG Storage Developer
-- standalone: Never need sync codes from individual repos, AIO MonoRepo become the source of truth
+This process will be automated using [shell scripts](https://github.com/mauriciopoppe/csi-sidecars-aio-poc/blob/main/hack/do_sync.sh).  This sync script will potentially performing necessary adjustments (like import path updates if needed by the dependency strategy).
 
 
-##### Individual repository state definition
+##### Individual repo history
 
-- Released: current state of individual repos
-- FeatureFreeze: 
-    - Any new feature PRs are not allowed to be filed to the master branch or release-X branches(Controlled by the individual repo maintainer, categorize it and reject it if it's a feature)
-    - SIG Storage Developer file the feature PRs to AIO MonoRepo 
-    - Except for the serious bugfixes or CVE fixes PRs (only from individual repo maintainer) which can be merged in master and backported to the other release-X branches
-- Deprecated:
-    - Not maintaining this repository
-    - Eventually the image is going away for the individual repo is going away (although wouldn't possible unless we migrate ALL the sidecars)
-    - (future) archive it but not at the same time as the deprecation time, this is a terminal state so we can't undo it
+The Git history from each individual repository must be preserved during the consolidation into the AIO MonoRepo.
+
+This is critical for traceability. It allows developers investigating bugs or changes in the MonoRepo to easily track the origin of the code back to its specific commit in the individual repository's history using standard Git tooling (git blame, git log).
+
+This will likely be achieved using Git strategies designed for repository merging, such as careful merge commits, git graft, or potentially git replace during the initial import phase, ensuring commit hashes remain discoverable. Tooling will be developed to aid this process.
 
 
-![state change](./aio11.png "overview of workflow definition")
+##### Reproducible builds & Dependencies Management
 
-##### Migration Process
+To keep reproducible builds of a Monorepo, when syncing codes from individual repositories, it is critical to enforce consistent dependency versions across all MonoRepo component.  Avoiding discrepancies that could break builds or introduce compatibility issues. We have two methods to achieve this:
 
-![migration process](./aio10.png "")
+1. Using Go Workspaces (introduced in Go 1.18)
+
+Using ```go work init``` and ```go work sync``` to manage multiple go.mod files within the MonoRepo.
+
+2. Single Root
+
+Removing monorepo component level go.mod/go.sum files and managing all dependencies via a single go.mod/go.sum at the repository root path.
+
+
+Conclusion: To simplify dependency management, including ensuring reproducible builds, we will adopt a single go.mod and go.work file at the root directory. Nested, imported repositories will not have their own go.mod files.
 
 
 #### Risks And Mitigations
 
-- Breaking changes in one component forces the single release to be a breaking change
+- Breaking Changes Amplification: Breaking changes in one component forces the single release to be a breaking change
 
-- Vulnerability that might affects one component affects all other components
+- Vulnerability Blast Radius: Vulnerability that might affects one component affects all other components
 
 see details in: https://docs.google.com/document/d/1SD4YRas_qXMP363L4j3WBTV_F9anq-5FM5gdGmJq7h0/edit?usp=sharing
 
-- Panic in one component restarts the sidecar
+- Panic Propagation: Panic in one component restarts the sidecar
 
 For each sidecar define the where in the stack a panic should be caught to possibly restart the controller. 
 
@@ -583,55 +604,140 @@ List of fixed issues related with panics:
 
 > panic like OOM doesn't count into this type(perhaps no good way to reduce the blast radius)
 
-- Keeping the monorepo and the existing sidecars repo up to date after the migration for X releases
+- Synchronization Complexity: Maintaining code consistency between the AIO MonoRepo and the individual repositories during the transition period (before full deprecation) requires careful management.
 
 
-
+#### Development workflow
 
 ### MileStone
 
-#### Milestone (completed): 
-Develop a minimal proof of concept
+![overview](./aio6.png "overview of definition of different workflows and milestones")
 
-POC: https://github.com/mauriciopoppe/csi-sidecars-aio-poc
+> **workflow1:**
+
+#### Milestone-modify-entrypoints-of-existing-sidecars-to-integrate-it-seamlessly-with-the-AIO-sidecar
+
+Objective: Refactor the CSI Sidecar entrypoint (e.g. cmd/external-attacher/main.go) so that it also exposes a public function that can be reused from both the existing cmd/external-attacher/main.go and from the AIO Sidecar main.
+
+Tasks:
+
+1. For {external-attacher, external-provisioner, ...} split the main function
+2. For {external-attacher, external-provisioner, ...} add per sidecar specific flags
+3. Introduce the concept of global flags in the AIO sidecar 
 
 
-#### Milestone-setup-a-repository-inside-kubernetes-csi
+> **workflow2:**
+#### Milestone-setting-up-a-Kubernetes-CSI-Storage-Repository-with-nested-directory-synchronization
+
+Objective: Create a new repository and mirror the nested directories of the existing sidecars to the new repository.
+
+Tasks:
+
+1. Create ```kubernetes-csi/csi-sidecars``` repository  
+2. Mirror the nested directories of the all the seven sidecars repo to the new repository.
+3. Add a README.md to the new repository.
 
 #### Milestone-Build-the-project-using-a-modified-copy-of-release-tools
 
+Objective: Use the release tools to build the project into AIO Sidecar images
+
+Tasks:
+
+1. Add new release logic of the release tools to support the AIO monorepo and individual repos at same time
+2. Build the project into AIO Sidecar image with the release tools
+
+
+<a id="e2e-test-passed"></a>
 #### Milestone-set-up-new-test-infra-jobs-to-test-the-project-through-the-hostpath-CSI-Driver
 
-#### Milestone-mirroring-of-nested-directories-to-repos-in-kubernetes-csi
+Objective: Ensure the AIO MonoRepo is testable using existing e2e tests and new CI infrastructure.
 
-#### Milestone-definition-of-the-development-workflow
+Tasks:
 
-#### Milestone-migration-of-CSI-Drivers-to-the-new-model 
+1. Modified the test infra jobs to support the new repository
+2. Validate prow jobs against new repo
+3. Set up github actions to trigger tests for every new PR, including all the e2e test of individual repo
 
-#### Milestone-monorepo-component-has-passed-all-e2e-test
+#### Milestone-ready-to-accept-PR-from-community
 
-Alpha phase
+Objective: Once individual repositories enter the FeatureFreeze state, the monorepo will be open to accept PRs from contributors of those repositories.
 
-#### Milestone-available-for use by cloud vendors in their environments.
+Tasks:
+1. Setup github actions(unit, golangci, etc) in new monorepo 
+2. create CONTRIBUTING.md guidelines specific to the MonoRepo.
 
-Beta phase
+---
 
-#### Milestone-be-ready-to-accept-PR-from-community
+> **workflow3** 
 
-Beta phase
+<a id="migration-path-definition"></a>
+#### Milestone-define-the-path-for-2-CSI-Drivers-to-be-migrated.
 
-#### Milestone-three-cloud-vendors-start-using-the-monorepo-component
+Objective: Develop detailed migration steps/examples for at least two representative CSI drivers.
 
-GA phase
+#### Milestone: Have instructions for CSI Driver authors
 
+Objective: Inform and guide CSI driver maintainers on how to adopt the new AIO sidecar model.
+
+Tasks:
+1. Socialize the KEP, document the migration process clearly.
+
+
+<a id="accepted-by-three-cloud-vendor"></a>
+#### Milestone-three-cloud-vendors-start-using-the-monorepo-component-for-multi-k8s-minor-releases 
+
+Objective: 3 CSI Drivers using the AIO sidecar for 3 consecutive k8s minor releases.
+
+Task:
+1. utilizing the provided migration instructions.
+2. Identify and support 3 cloud vendors using the AIO sidecar image in production across 3 consecutive Kubernetes minor releases
+
+
+#### Milestone-accept-PR-from-community
+
+Objective: Transition development fully to the MonoRepo as individual repositories freeze.
+
+Tasks:
+1. Mark external-provisioner as featurefreeze state
+2. Accept external-provisioner Monorepo component's PRs
+3. Mark external-attacher as featurefreeze state
+4. Accept external-attacher Monorepo component's PRs
+5. ....
+
+
+> **workflow4** 
+#### milestone-all-individual-repo-has-been-into-featurefreeze-state
+
+objective: Systematically stop new feature development in individual repositories.
+
+task:
+1. Announce FeatureFreeze dates per individual repo
+2. coordinate with maintainers to stop merging feature PRs of individual repo
+3. merge pending PRs to the specific individual repo
+4. Formally mark individual repo as feature-frozen.
+5. Repeat sequentially for all individual repos.
+
+
+<a id="all-individual-repo-deprecated"></a>
 #### Milestone-all-individual-repo-has-been-into-deprecated-state
 
-Standalone phase
+Objective: To gracefully deprecate individual repository while maintaining clear communication with its users and contributors, ensuring a smooth transition to monorepo.
 
+Task:
+1. Write a deprecation notice to the specific individual repo
+2. Create a release in the individual repo and mark it as deprecated
+3. Notify key contributors, and users of the planned deprecation through mailing lists
+4. Assist Users in transitioning to monorepo through issues or slack.
+5. Repeat sequentially for all repos.
+
+
+<a id="informer-merged"></a>
 #### Milestone-merge-sidecar-informer-caches
 
-Standalone phase
+Objective: To merge the sidecar informer caches, which will allow us to use cache more efficiently.
 
+This is a nice improvement that shouldn't be part of the MVP yet. 
+It will happen after all of the CSI sidecars have been deprecated or migrated to the monorepo, and we will start it in another KEP 
 
 ### Test Plan
 
@@ -653,6 +759,7 @@ when drafting this test plan.
 Based on reviewers feedback describe what additional tests need to be added prior
 implementing this enhancement to ensure the enhancements have also solid foundations.
 -->
+
 
 
 ##### Unit tests
@@ -702,98 +809,58 @@ We expect no non-infra related flakes in the last month as a GA graduation crite
 
 ### Graduation Criteria
 
-<!--
-**Note:** *Not required until targeted at a release.*
+#### AIO MonoRepo state definition
 
-Define graduation milestones.
+- Design: The initial planning and definition phase (current state described in documentation).
+- [Alpha](#e2e-test-passed): 
+    Technical feasibility established. All seven sidecar repositories' code has been integrated into the MonoRepo structure, and all original end-to-end (e2e) tests from the individual repositories pass successfully within the MonoRepo's test infrastructure.
+- [Beta](#migration-path-definition) (production-verified): 
+    The MonoRepo is considered stable enough for early adoption by cloud vendors in production environments. Clear migration paths for CSI drivers are defined and documented. 
+- [GA](#accepted-by-three-cloud-vendor) (released): 
+    The MonoRepo actively maintained, and accepts contributions (PRs) from the SIG Storage developer community. Development focus shifts from individual repositories to the MonoRepo components. Requires adoption and use in production by at least three cloud vendors.
+- [Standalone](#all-individual-repo-deprecated): 
+    Final state. The AIO MonoRepo is the source of truth. Code synchronization from individual repositories is no longer necessary as they are all deprecated.
 
-These may be defined in terms of API maturity, [feature gate] graduations, or as
-something else. The KEP should keep this high-level with a focus on what
-signals will be looked at to determine graduation.
+Beta graduation would be at least 2 CSI Drivers using the AIO sidecar for at least 2 consecutive k8s minor releases.
+GA graduation would be at least 2 CSI Drivers using the AIO sidecar for 3 consecutive k8s minor releases.
 
-Consider the following in developing the graduation criteria for this enhancement:
-- [Maturity levels (`alpha`, `beta`, `stable`)][maturity-levels]
-- [Feature gate][feature gate] lifecycle
-- [Deprecation policy][deprecation-policy]
 
-Clearly define what graduation means by either linking to the [API doc
-definition](https://kubernetes.io/docs/concepts/overview/kubernetes-api/#api-versioning)
-or by redefining what graduation means.
+#### Individual repository state definition
 
-In general we try to use the same stages (alpha, beta, GA), regardless of how the
-functionality is accessed.
+- Released: current state of individual repos
+- FeatureFreeze: 
+    - Any new feature PRs are not allowed to be filed to the master branch or release-X branches(Controlled by the individual repo maintainer, categorize it and reject it if it's a feature)
+    - SIG Storage Developer file the feature PRs to AIO MonoRepo 
+    - Except for the serious bugfixes or CVE fixes PRs (only from individual repo maintainer) which can be merged in master and backported to the other release-X branches
+- Deprecated:
+    - Active maintenance stops.
+    - Eventually, building new images from this repository ceases (dependent on the full migration of all sidecars).
+    - (future) archive it but not at the same time as the deprecation time, this is a terminal state so we can't undo it
 
-[feature gate]: https://git.k8s.io/community/contributors/devel/sig-architecture/feature-gates.md
-[maturity-levels]: https://git.k8s.io/community/contributors/devel/sig-architecture/api_changes.md#alpha-beta-and-stable-versions
-[deprecation-policy]: https://kubernetes.io/docs/reference/using-api/deprecation-policy/
 
-Below are some examples to consider, in addition to the aforementioned [maturity levels][maturity-levels].
+![state change](./aio11.png "overview of workflow definition")
 
-#### Alpha
+#### Migration Process
 
-- Feature implemented behind a feature flag
-- Initial e2e tests completed and enabled
+The migration follows a phased approach:
 
-#### Beta
+- Foundation & Setup: Create the new AIO MonoRepo, mirror the code (preserving history), adapt build/release tooling, and establish comprehensive test infrastructure (unit, integration, e2e, CI/GitHub Actions).
+- Integration: Refactor the entry points (main.go) of individual repository to be callable functions, enabling them to run both standalone (for backward compatibility tests) and as part of the unified AIO binary, introducing global and component-specific flags.
+- Adoption & Community Transition: Provide clear documentation and migration guidance for CSI driver authors. Engage with cloud vendors to test and adopt the AIO sidecar image in production (Beta -> GA trigger). Open the MonoRepo for community contributions as individual repositories enter FeatureFreeze.
+- Individual Repository Phase-Out: Sequentially transition each individual repository into FeatureFreeze, followed by Deprecated status, communicating clearly with users and maintainers.
+- Finalization: Once all individual repositories are deprecated, the AIO MonoRepo reaches the Standalone state.
 
-- Gather feedback from developers and surveys
-- Complete features A, B, C
-- Additional tests are in Testgrid and linked in KEP
-
-#### GA
-
-- N examples of real-world usage
-- N installs
-- More rigorous forms of testing—e.g., downgrade tests and scalability tests
-- Allowing time for feedback
-
-**Note:** Generally we also wait at least two releases between beta and
-GA/stable, because there's no opportunity for user feedback, or even bug reports,
-in back-to-back releases.
-
-**For non-optional features moving to GA, the graduation criteria must include
-[conformance tests].**
-
-[conformance tests]: https://git.k8s.io/community/contributors/devel/sig-architecture/conformance-tests.md
-
-#### Deprecation
-
-- Announce deprecation and support policy of the existing flag
-- Two versions passed since introducing the functionality that deprecates the flag (to address version skew)
-- Address feedback on usage/changed behavior, provided on GitHub issues
-- Deprecate the flag
--->
+![migration process](./aio10.png "")
 
 
 ### Upgrade / Downgrade Strategy
 
-<!--
-If applicable, how will the component be upgraded and downgraded? Make sure
-this is in the test plan.
 
-Consider the following in developing an upgrade/downgrade strategy for this
-enhancement:
-- What changes (in invocations, configurations, API use, etc.) is an existing
-  cluster required to make on upgrade, in order to maintain previous behavior?
-- What changes (in invocations, configurations, API use, etc.) is an existing
-  cluster required to make on upgrade, in order to make use of the enhancement?
--->
-
+The entire switchover is relatively simple, as it does not involve a gradual upgrade of the kubernetes controller plane components and data plane component, only the yaml and image of the csi components need to be upgraded, and the rollback is achieved directly through ```kubectl rollout```.
 
 ### Version Skew Strategy
 
-<!--
-If applicable, how will the component handle version skew with other
-components? What are the guarantees? Make sure this is in the test plan.
-
-Consider the following in developing a version skew strategy for this
-enhancement:
-- Does this enhancement involve coordinating behavior in the control plane and
-  in the kubelet? How does an n-2 kubelet without this feature available behave
-  when this feature is used?
-- Will any other components on the node change? For example, changes to CSI,
-  CRI or CNI may require updating that component before the kubelet.
--->
+Nothing in particular.
 
 
 ## Production Readiness Review Questionnaire
@@ -845,46 +912,20 @@ It's actually not a feature, but we can enable it by deploy new version of csidr
 
 This won't make any changes to the default behavior of Kubernetes.
 
-<!--
-Any change of default behavior may be surprising to users or break existing
-automations, so be extremely careful here.
--->
 
 ###### Can the feature be disabled once it has been enabled (i.e. can we roll back the enablement)?
 
 It's actually not a feature, it's kind of architectural change. so user can deploy old version csi driver to disable it.
 
-<!--
-Describe the consequences on existing workloads (e.g., if this is a runtime
-feature, can it break the existing applications?).
-
-Feature gates are typically disabled by setting the flag to `false` and
-restarting the component. No other changes should be necessary to disable the
-feature.
-
-NOTE: Also set `disable-supported` to `true` or `false` in `kep.yaml`.
--->
 
 ###### What happens if we reenable the feature if it was previously rolled back?
 
-Nothing happend, it will act as usually
+Nothing happened, it will act as usually
 
 ###### Are there any tests for feature enablement/disablement?
 
 Yes. We will add unit tests with and without the feature gate enabled.
 
-<!--
-The e2e framework does not currently support enabling or disabling feature
-gates. However, unit tests in each component dealing with managing data, created
-with and without the feature, are necessary. At the very least, think about
-conversion tests if API types are being modified.
-
-Additionally, for features that are introducing a new API field, unit tests that
-are exercising the `switch` of feature gate itself (what happens if I disable a
-feature gate after having objects written with the new field) are also critical.
-You can take a look at one potential example of such test in:
-https://github.com/kubernetes/kubernetes/pull/97058/files#diff-7826f7adbc1996a05ab52e3f5f02429e94b68ce6bce0dc534d1be636154fded3R246-R282
--->
 
 ### Rollout, Upgrade and Rollback Planning
 
@@ -894,24 +935,13 @@ This section must be completed when targeting beta to a release.
 
 ###### How can a rollout or rollback fail? Can it impact already running workloads?
 
+No, it will not impact already running workloads.
 
-<!--
-Try to be as paranoid as possible - e.g., what if some components will restart
-mid-rollout?
-
-Be sure to consider highly-available clusters, where, for example,
-feature flags will be enabled on some API servers and not others during the
-rollout. Similarly, consider large clusters and how enablement/disablement
-will rollout across nodes.
--->
 
 ###### What specific metrics should inform a rollback?
 
+Should be aware of pvc/pv and pod related persistent external storage failures event
 
-<!--
-What signals should users be paying attention to when the feature is young
-that might indicate a serious problem?
--->
 
 ###### Were upgrade and rollback tested? Was the upgrade->downgrade->upgrade path tested?
 
@@ -924,10 +954,7 @@ are missing a bunch of machinery and tooling and can't do that now.
 
 ###### Is the rollout accompanied by any deprecations and/or removals of features, APIs, fields of API types, flags, etc.?
 
-
-<!--
-Even if applying deprecation policies, they may still surprise some users.
--->
+No, it does not.
 
 ### Monitoring Requirements
 
@@ -941,6 +968,8 @@ previous answers based on experience in the field.
 ###### How can an operator determine if the feature is in use by workloads?
 
 
+Determine whether the `csi-provisioner` deployment includes a AIO Sidecar image by inspecting its container configuration.
+
 <!--
 Ideally, this should be a metric. Operations against the Kubernetes API (e.g.,
 checking if there are objects with field X set) may be a last resort. Avoid
@@ -949,6 +978,7 @@ logs or events for this purpose.
 
 ###### How can someone using this feature know that it is working for their instance?
 
+Only if their csi plugin are working correctly.
 
 <!--
 For instance, if this is a pod-related feature, it should be possible to determine if the feature is functioning properly
@@ -958,14 +988,6 @@ Please describe all items visible to end users below with sufficient detail so t
 and operation of this feature.
 Recall that end users cannot usually observe component logs or access metrics.
 -->
-
-- [ ] Events
-  - Event Reason: 
-- [ ] API .status
-  - Condition name: 
-  - Other field: 
-- [ ] Other (treat as last resort)
-  - Details:
 
 ###### What are the reasonable SLOs (Service Level Objectives) for the enhancement?
 
@@ -1047,85 +1069,33 @@ previous answers based on experience in the field.
 
 ###### Will enabling / using this feature result in any new API calls?
 
+No, It doesn't increase the number of API calls. In fact, it will decreasing it
 
-<!--
-Describe them, providing:
-  - API call type (e.g. PATCH pods)
-  - estimated throughput
-  - originating component(s) (e.g. Kubelet, Feature-X-controller)
-Focusing mostly on:
-  - components listing and/or watching resources they didn't before
-  - API calls that may be triggered by changes of some Kubernetes resources
-    (e.g. update of object X triggers new updates of object Y)
-  - periodic API calls to reconcile state (e.g. periodic fetching state,
-    heartbeats, leader election, etc.)
--->
 
 ###### Will enabling / using this feature result in introducing new API types?
 
+Nope
 
-<!--
-Describe them, providing:
-  - API type
-  - Supported number of objects per cluster
-  - Supported number of objects per namespace (for namespace-scoped objects)
--->
 
 ###### Will enabling / using this feature result in any new calls to the cloud provider?
 
-<!--
-Describe them, providing:
-  - Which API(s):
-  - Estimated increase:
--->
+Nope
 
 ###### Will enabling / using this feature result in increasing size or count of the existing API objects?
 
-
-<!--
-Describe them, providing:
-  - API type(s):
-  - Estimated increase in size: (e.g., new annotation of size 32B)
-  - Estimated amount of new objects: (e.g., new Object X for every existing Pod)
--->
+Nope
 
 ###### Will enabling / using this feature result in increasing time taken by any operations covered by existing SLIs/SLOs?
 
-
-<!--
-Look at the [existing SLIs/SLOs].
-
-Think about adding additional work or introducing new steps in between
-(e.g. need to do X to start a container), etc. Please describe the details.
-
-[existing SLIs/SLOs]: https://git.k8s.io/community/sig-scalability/slos/slos.md#kubernetes-slisslos
--->
+Nope
 
 ###### Will enabling / using this feature result in non-negligible increase of resource usage (CPU, RAM, disk, IO, ...) in any components?
 
-
-<!--
-Things to keep in mind include: additional in-memory state, additional
-non-trivial computations, excessive access to disks (including increased log
-volume), significant amount of data sent and/or received over network, etc.
-This through this both in small and large cases, again with respect to the
-[supported limits].
-
-[supported limits]: https://git.k8s.io/community//sig-scalability/configs-and-limits/thresholds.md
--->
+It will reduce disk and memory usage due to merging image and cache informer of csi driver
 
 ###### Can enabling / using this feature result in resource exhaustion of some node resources (PIDs, sockets, inodes, etc.)?
 
-<!--
-Focus not just on happy cases, but primarily on more pathological cases
-(e.g. probes taking a minute instead of milliseconds, failed pods consuming resources, etc.).
-If any of the resources can be exhausted, how this is mitigated with the existing limits
-(e.g. pods per node) or new limits added by this KEP?
-
-Are there any tests that were run/should be run to understand performance characteristics better
-and validate the declared limits?
--->
-
+Nope
 
 ### Troubleshooting
 
